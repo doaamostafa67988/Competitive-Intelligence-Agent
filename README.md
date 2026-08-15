@@ -4,6 +4,8 @@ A standing multi-agent system that tracks named competitors' pricing pages,
 press releases, and job postings, and produces a weekly, source-verified
 executive brief with a "what changed" section.
 
+https://github.com/user-attachments/assets/aa3feb08-a704-458f-bff5-7073abcef645
+
 ## Architecture
 
 ```
