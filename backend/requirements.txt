@@ -1,0 +1,17 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.11.7
+pydantic-settings==2.6.1
+langgraph==1.2.11
+groq==1.6.0
+openai==1.99.9
+fastmcp==2.11.3
+httpx==0.28.1
+neo4j==5.25.0
+qdrant-client==1.11.3
+voyageai==0.3.1
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+apscheduler==3.10.4
+python-dotenv==1.1.0
+typing_extensions>=4.12.0
