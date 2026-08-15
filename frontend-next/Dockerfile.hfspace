@@ -1,0 +1,18 @@
+FROM node:20-slim AS builder
+WORKDIR /app
+COPY package.json .
+RUN npm install
+COPY . .
+
+# NEXT_PUBLIC_* vars are baked in at build time, not read at runtime —
+# so this has to be a build ARG, not just a Space "Variable".
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+RUN npm run build
+
+FROM node:20-slim
+WORKDIR /app
+COPY --from=builder /app ./
+EXPOSE 7860
+ENV PORT=7860
+CMD ["npm", "start", "--", "-p", "7860"]
