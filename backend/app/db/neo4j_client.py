@@ -92,6 +92,18 @@ class Neo4jClient:
             result = session.run(cypher, params or {})
             return [dict(record) for record in result]
 
+    def list_tracked_competitors(self) -> List[Dict[str, Any]]:
+        """Return every Competitor node with tracked=true, in the shape the
+        pipeline's CompetitorTarget expects. This is the single source of
+        truth for "which competitors should the scheduler run against" —
+        used by both the weekly pipeline job and the alert-polling job so
+        neither one silently falls back to the static .env list."""
+        cypher = (
+            "MATCH (c:Competitor) WHERE c.tracked = true "
+            "RETURN c.key AS name, c.pricing_url AS pricing_url, c.careers_url AS careers_url"
+        )
+        return self.query_relationship_question(cypher)
+
     def competitors_who_changed_price_n_times(self, since_iso: str, n: int = 2) -> List[Dict[str, Any]]:
         cypher = """
         MATCH (c:Competitor)-[r:RAISED_PRICE_ON|LOWERED_PRICE_ON]->(:PricePoint)
