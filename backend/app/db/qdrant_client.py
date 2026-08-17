@@ -12,7 +12,7 @@ from app.config import get_settings
 
 settings = get_settings()
 
-EMBEDDING_DIM = 1536  # matches text-embedding-3-small / voyage-3 style dims; adjust to your embedder
+EMBEDDING_DIM = 1024  # voyage-3 output dimension; change if you swap embedding providers/models
 
 
 class VectorStore:
