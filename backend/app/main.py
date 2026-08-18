@@ -14,9 +14,13 @@ from app.config import get_settings
 from app.db.postgres_client import init_models
 from app.db.neo4j_client import get_neo4j_client
 from app.services.scheduler import start_scheduler
-from app.api import routes_brief, routes_competitors, routes_graph, routes_social
+from app.api import routes_brief, routes_competitors, routes_graph, routes_social, routes_qa, routes_topics
 
 settings = get_settings()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger("startup")
 
 
@@ -64,6 +68,8 @@ app.include_router(routes_brief.router, prefix=settings.API_V1_PREFIX)
 app.include_router(routes_competitors.router, prefix=settings.API_V1_PREFIX)
 app.include_router(routes_graph.router, prefix=settings.API_V1_PREFIX)
 app.include_router(routes_social.router, prefix=settings.API_V1_PREFIX)
+app.include_router(routes_qa.router, prefix=settings.API_V1_PREFIX)
+app.include_router(routes_topics.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health")

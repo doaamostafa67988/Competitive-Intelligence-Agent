@@ -17,11 +17,26 @@ whichever provider you pick (e.g. "llama-3.3-70b-versatile" for Groq,
 from __future__ import annotations
 import json
 import logging
+import os
 import re
+import time
+import uuid
 from app.config import get_settings
 
 settings = get_settings()
+
+# LangSmith reads its config from process env vars, not from our Settings
+# object directly - mirror the two here before `traceable` is imported so
+# tracing picks up whatever's in .env without a separate export step.
+if settings.LANGCHAIN_API_KEY:
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true" if settings.LANGCHAIN_TRACING_V2 else "false")
+    os.environ.setdefault("LANGCHAIN_API_KEY", settings.LANGCHAIN_API_KEY)
+    os.environ.setdefault("LANGCHAIN_PROJECT", settings.LANGCHAIN_PROJECT)
+
+from langsmith import traceable  # noqa: E402 - must follow the env var setup above
+
 logger = logging.getLogger("llm")
+step_logger = logging.getLogger("llm.steps")  # separate logger so input/output can be filtered/routed independently
 
 
 def _build_client():
@@ -38,7 +53,8 @@ def _build_client():
 _client = _build_client()
 
 
-async def call_llm(system: str, user: str, max_tokens: int = 2000) -> str:
+@traceable(name="call_llm", run_type="llm")
+async def call_llm(system: str, user: str, max_tokens: int = 2000, step: str = "unknown") -> str:
     """
     Resilient by design: if the provider call fails (rate limit, quota
     exhausted, transient network error, etc.) this logs the failure and
@@ -46,7 +62,19 @@ async def call_llm(system: str, user: str, max_tokens: int = 2000) -> str:
     empty response as "no observations extracted" (extract_json raises
     JSONDecodeError -> caught -> []), so one competitor/source hitting a
     rate limit no longer kills the whole pipeline run.
+
+    `step` tags which agent/prompt this call belongs to (e.g.
+    "research_agent.extract", "fact_checker.cluster") so every call can be
+    traced end-to-end: this is the single chokepoint every agent's LLM work
+    passes through, so logging here covers all of them without touching
+    each agent's business logic.
     """
+    call_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    step_logger.info(
+        "llm_call_start id=%s step=%s system=%s user=%s",
+        call_id, step, _truncate(system), _truncate(user),
+    )
     try:
         resp = await _client.chat.completions.create(
             model=settings.LLM_MODEL,
@@ -57,10 +85,110 @@ async def call_llm(system: str, user: str, max_tokens: int = 2000) -> str:
                 {"role": "user", "content": user},
             ],
         )
-        return resp.choices[0].message.content or ""
+        content = resp.choices[0].message.content or ""
+        step_logger.info(
+            "llm_call_end id=%s step=%s duration_ms=%d output=%s",
+            call_id, step, int((time.monotonic() - started) * 1000), _truncate(content),
+        )
+        return content
     except Exception as e:
         logger.warning("LLM call failed (%s), skipping this extraction: %s", settings.LLM_PROVIDER, e)
+        step_logger.info(
+            "llm_call_error id=%s step=%s duration_ms=%d error=%s",
+            call_id, step, int((time.monotonic() - started) * 1000), e,
+        )
         return ""
+
+
+@traceable(name="call_llm_with_tools", run_type="chain")
+async def call_llm_with_tools(
+    system: str,
+    user: str,
+    tools: list[dict],
+    tool_executor,
+    max_tokens: int = 1500,
+    step: str = "unknown",
+    max_rounds: int = 3,
+) -> str:
+    """
+    Multi-round tool-calling loop for agents that need to decide *which*
+    read-only lookup to run based on free-text input (the Q&A agent), as
+    opposed to every other agent here which always runs the same fixed
+    sequence of calls. `tools` is an OpenAI-style function-calling schema;
+    `tool_executor(name, args) -> Any` is called for each tool_call the
+    model requests and must itself enforce whatever safety limits apply to
+    that tool (e.g. only pre-approved Cypher templates - see
+    db/neo4j_client.py). This function only owns the conversation loop, not
+    tool safety.
+
+    Capped at `max_rounds` model round-trips so a model that keeps calling
+    tools without ever answering can't loop forever; returns "" if it never
+    produces a final text answer within the cap (callers treat "" the same
+    as any other empty LLM response).
+    """
+    call_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    step_logger.info("llm_tool_call_start id=%s step=%s user=%s", call_id, step, _truncate(user))
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    try:
+        for round_num in range(max_rounds):
+            resp = await _client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                max_tokens=max_tokens,
+                temperature=settings.LLM_TEMPERATURE,
+                messages=messages,
+                tools=tools,
+            )
+            msg = resp.choices[0].message
+            tool_calls = getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                content = msg.content or ""
+                step_logger.info(
+                    "llm_tool_call_end id=%s step=%s rounds=%d duration_ms=%d output=%s",
+                    call_id, step, round_num + 1, int((time.monotonic() - started) * 1000), _truncate(content),
+                )
+                return content
+
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {"id": tc.id, "type": "function",
+                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                    for tc in tool_calls
+                ],
+            })
+            for tc in tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                step_logger.info("llm_tool_invoke id=%s step=%s tool=%s args=%s", call_id, step, tc.function.name, args)
+                try:
+                    result = await tool_executor(tc.function.name, args)
+                except Exception as e:
+                    result = {"error": str(e)}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": _truncate(json.dumps(result, default=str), limit=3000),
+                })
+
+        step_logger.info("llm_tool_call_exhausted id=%s step=%s max_rounds=%d", call_id, step, max_rounds)
+        return ""
+    except Exception as e:
+        logger.warning("LLM tool-call loop failed (%s): %s", settings.LLM_PROVIDER, e)
+        step_logger.info("llm_tool_call_error id=%s step=%s error=%s", call_id, step, e)
+        return ""
+
+
+def _truncate(text: str, limit: int = 1500) -> str:
+    """Log bodies are capped so a 20k-char scraped pricing page doesn't
+    blow up log volume; raise `limit` locally if you need the full text
+    for a specific debugging session."""
+    text = text.replace("\n", " ")
+    return text if len(text) <= limit else text[:limit] + f"...[+{len(text) - limit} chars]"
 
 
 def extract_json(text: str):

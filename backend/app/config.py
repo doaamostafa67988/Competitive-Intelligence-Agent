@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # --- Fact-checking ---
     MIN_SOURCES_TO_CONFIRM: int = 2
 
+    # --- LangSmith (tracing + evaluation) ---
+    # https://smith.langchain.com/settings -> API keys. Leave LANGCHAIN_API_KEY
+    # empty to run with tracing disabled (call_llm/call_llm_with_tools work
+    # unchanged either way; @traceable becomes a no-op without a key).
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "competitive-intel-agent"
+
     class Config:
         env_file = ".env"
         case_sensitive = True

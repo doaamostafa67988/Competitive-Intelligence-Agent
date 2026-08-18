@@ -85,7 +85,7 @@ class SocialListeningAgent:
                 sample_posts=[],
             )
 
-        response = await call_llm(SCORING_SYSTEM_PROMPT, self._build_user_prompt(competitor, posts), max_tokens=1200)
+        response = await call_llm(SCORING_SYSTEM_PROMPT, self._build_user_prompt(competitor, posts), max_tokens=1200, step="social_listening.score")
         try:
             data = extract_json(response)
         except Exception:

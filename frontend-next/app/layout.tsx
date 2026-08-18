@@ -22,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link className="nav-link" href="/competitors">Competitors</Link>
               <Link className="nav-link" href="/social">Social Listening</Link>
               <Link className="nav-link" href="/graph">Knowledge Graph</Link>
+              <Link className="nav-link" href="/qa">Ask a Question</Link>
             </nav>
           </aside>
           <main className="main">{children}</main>

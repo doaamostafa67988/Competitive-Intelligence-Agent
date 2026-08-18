@@ -89,6 +89,7 @@ class CompetitiveBrief(BaseModel):
     sections: List[BriefSection]
     change_log: List[ChangeLogEntry]
     unconfirmed_claims: List[str] = Field(default_factory=list)
+    change_log_summary: Optional[str] = None  # LLM narrative of change_log entries filtered to tracked_topics; None if no topics configured
 
 
 class SocialPlatform(str, Enum):
@@ -145,3 +146,14 @@ class AlertEvent(BaseModel):
     detail: str
     source_url: str
     triggered_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class QAAnswer(BaseModel):
+    """Output of the Q&A Agent: a free-text answer to an arbitrary user
+    question about tracked competitors, plus which lookups it actually used
+    and the underlying data points retrieved, so the answer is auditable
+    back to real data rather than an unsupported LLM claim."""
+    question: str
+    answer: str
+    tools_used: List[str] = Field(default_factory=list)
+    sources: List[dict] = Field(default_factory=list)

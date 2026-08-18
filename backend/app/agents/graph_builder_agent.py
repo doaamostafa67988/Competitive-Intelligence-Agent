@@ -9,11 +9,16 @@ still written to the graph but tagged `confirmed: false` so the Analyst
 Agent and brief renderer can treat them differently.
 """
 from __future__ import annotations
+import logging
 from datetime import date
 from typing import List
 from app.agents.llm import call_llm, extract_json
 from app.db.neo4j_client import get_neo4j_client
 from app.models.schemas import GraphEntity, GraphRelationship, GraphUpdate, VerifiedClaim, VerificationStatus
+from app.services.guardrails import check_output_json_schema
+from app.services.sentiment import score_sentiment
+
+logger = logging.getLogger("graph_builder_agent")
 
 EXTRACTION_SYSTEM_PROMPT = """You convert a verified competitive-intelligence
 claim into graph entities and relationships for a Neo4j knowledge graph.
@@ -32,6 +37,18 @@ Use natural keys like "Acme" for a Competitor, "Acme::Pro Plan" for a Product,
 (ISO 8601) property on PricePoint/Announcement/JobPosting nodes and
 relationships where a date is implied or known; use today's date if the claim
 doesn't specify one."""
+
+# Output guardrail (also closes a Cypher-injection hole): neo4j_client.py's
+# upsert_entity/upsert_relationship interpolate label/rel_type directly into
+# the Cypher string (f"MERGE (n:{entity.label} ...)"). The prompt above asks
+# the LLM to only use these values, but a prompt is not enforcement - this
+# whitelist is checked before anything derived from the LLM response reaches
+# neo4j_client, so a hallucinated or injected label/rel_type is dropped here
+# instead of being interpolated into a live Cypher query.
+ALLOWED_LABELS = {"Competitor", "Product", "PricePoint", "Announcement", "JobPosting"}
+ALLOWED_REL_TYPES = {
+    "OFFERS", "PRICED_AT", "RAISED_PRICE_ON", "LOWERED_PRICE_ON", "ANNOUNCED", "POSTED_ROLE", "LAUNCHED",
+}
 
 
 class GraphBuilderAgent:
@@ -61,21 +78,34 @@ class GraphBuilderAgent:
             f"Status: {claim.status.value}\n"
             f"Today: {date.today().isoformat()}"
         )
-        response = await call_llm(EXTRACTION_SYSTEM_PROMPT, user_prompt)
+        response = await call_llm(EXTRACTION_SYSTEM_PROMPT, user_prompt, step="graph_builder.extract")
         try:
             data = extract_json(response)
         except Exception:
             return [], []
+        # Output guardrail: reject a parseable-but-malformed response (e.g.
+        # missing "entities"/"relationships" keys) before we try to write
+        # anything derived from it into Neo4j.
+        if not check_output_json_schema(data, {"entities", "relationships"}, step="graph_builder.extract"):
+            return [], []
 
         entities = []
         for e in data.get("entities", []):
+            if e.get("label") not in ALLOWED_LABELS or not e.get("key"):
+                logger.warning("graph_builder dropped entity with disallowed/missing label: %r", e.get("label"))
+                continue
             props = dict(e.get("properties", {}))
             props["confirmed"] = claim.status == VerificationStatus.CONFIRMED
             props["source_claim_id"] = claim.id
+            if e["label"] == "Announcement" and "sentiment" not in props:
+                props["sentiment"] = await score_sentiment(claim.claim)
             entities.append(GraphEntity(label=e["label"], key=e["key"], properties=props))
 
         relationships = []
         for r in data.get("relationships", []):
+            if r.get("rel_type") not in ALLOWED_REL_TYPES or not r.get("from_key") or not r.get("to_key"):
+                logger.warning("graph_builder dropped relationship with disallowed/missing rel_type: %r", r.get("rel_type"))
+                continue
             props = dict(r.get("properties", {}))
             props["confirmed"] = claim.status == VerificationStatus.CONFIRMED
             props["source_claim_id"] = claim.id

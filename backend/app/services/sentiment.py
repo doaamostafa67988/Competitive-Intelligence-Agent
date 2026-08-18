@@ -12,5 +12,5 @@ Respond with ONLY the single label, nothing else."""
 
 
 async def score_sentiment(announcement_text: str) -> str:
-    label = await call_llm(SENTIMENT_SYSTEM_PROMPT, announcement_text[:2000], max_tokens=10)
+    label = await call_llm(SENTIMENT_SYSTEM_PROMPT, announcement_text[:2000], max_tokens=10, step="sentiment.score")
     return label.strip().lower()

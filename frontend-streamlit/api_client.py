@@ -90,3 +90,34 @@ def repeat_price_changers(since: str, n: int = 2):
         r = c.get("/graph/repeat-price-changers", params={"since": since, "n": n})
         r.raise_for_status()
         return r.json()
+
+
+def ask_question(question: str):
+    # Longer timeout than the shared client: the Q&A agent's tool-calling
+    # loop can involve several LLM round-trips (see
+    # agents/llm.py::call_llm_with_tools), not a single request/response.
+    with httpx.Client(base_url=API_BASE, timeout=180) as c:
+        r = c.post("/qa", json={"question": question})
+        r.raise_for_status()
+        return r.json()
+
+
+def list_topics():
+    with _client() as c:
+        r = c.get("/topics")
+        r.raise_for_status()
+        return r.json()
+
+
+def add_topic(topic: str):
+    with _client() as c:
+        r = c.post("/topics", json={"topic": topic})
+        r.raise_for_status()
+        return r.json()
+
+
+def remove_topic(topic_id: str):
+    with _client() as c:
+        r = c.delete(f"/topics/{topic_id}")
+        r.raise_for_status()
+        return r.json()

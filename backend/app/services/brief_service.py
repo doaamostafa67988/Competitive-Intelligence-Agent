@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.db.postgres_client import AsyncSessionLocal, BriefRecord
 from app.models.schemas import CompetitiveBrief
 from app.mcp.mcp_client import call_tool
+from app.services.guardrails import redact_pii
 
 
 async def save_brief(brief: CompetitiveBrief) -> None:
@@ -21,6 +22,7 @@ async def save_brief(brief: CompetitiveBrief) -> None:
             sections_json=[s.model_dump() for s in brief.sections],
             change_log_json=[c.model_dump() for c in brief.change_log],
             unconfirmed_claims_json=brief.unconfirmed_claims,
+            change_log_summary=brief.change_log_summary,
         )
         session.add(record)
         await session.commit()
@@ -51,6 +53,9 @@ def render_markdown(brief: CompetitiveBrief) -> str:
         lines.append("")
     if brief.change_log:
         lines.append("## What's New This Week")
+        if brief.change_log_summary:
+            lines.append(f"_{brief.change_log_summary}_")
+            lines.append("")
         for entry in brief.change_log:
             lines.append(f"- [{entry.change_type.upper()}] {entry.competitor}: {entry.description}")
         lines.append("")
@@ -65,7 +70,7 @@ logger = logging.getLogger("brief_service")
 
 
 async def publish_to_telegram(brief: CompetitiveBrief) -> dict:
-    markdown = render_markdown(brief)
+    markdown = redact_pii(render_markdown(brief), step="brief_service.publish_to_telegram")
     result = await call_tool("post_telegram_digest", markdown_text=markdown)
     if not result or not result.get("ok"):
         reason = (result or {}).get("reason", "no response from MCP tool")

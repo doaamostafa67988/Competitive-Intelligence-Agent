@@ -12,6 +12,7 @@ import uuid
 from app.agents.llm import call_llm, extract_json
 from app.mcp.mcp_client import call_tool
 from app.models.schemas import AlertEvent
+from app.services.guardrails import check_output_json_schema, redact_pii
 
 ALERT_SYSTEM_PROMPT = """You monitor breaking competitor news for a SaaS
 company's leadership team. Given a batch of recent headlines/snippets for a
@@ -27,11 +28,14 @@ async def check_for_alerts(competitor: str) -> list[AlertEvent]:
     if not news:
         return []
     payload = "\n".join(f"- {n.get('title')} | {n.get('url')} | {n.get('snippet')}" for n in news)
-    response = await call_llm(ALERT_SYSTEM_PROMPT, f"Competitor: {competitor}\n\n{payload}")
+    response = await call_llm(ALERT_SYSTEM_PROMPT, f"Competitor: {competitor}\n\n{payload}", step="alerting.assess")
     try:
         items = extract_json(response)
     except Exception:
         return []
+    if not isinstance(items, list):
+        return []
+    items = [i for i in items if check_output_json_schema(i, {"headline", "severity"}, step="alerting.assess")]
 
     alerts = [
         AlertEvent(
@@ -47,8 +51,9 @@ async def check_for_alerts(competitor: str) -> list[AlertEvent]:
 
     for alert in alerts:
         if alert.severity in ("medium", "high"):
-            await call_tool(
-                "post_telegram_digest",
-                markdown_text=f":rotating_light: *{alert.severity.upper()} ALERT — {alert.competitor}*\n{alert.headline}\n{alert.detail}\n{alert.source_url}",
+            text = redact_pii(
+                f":rotating_light: *{alert.severity.upper()} ALERT — {alert.competitor}*\n{alert.headline}\n{alert.detail}\n{alert.source_url}",
+                step="alerting.telegram_post",
             )
+            await call_tool("post_telegram_digest", markdown_text=text)
     return alerts

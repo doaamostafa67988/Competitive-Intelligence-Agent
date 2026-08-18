@@ -89,6 +89,19 @@ export interface SocialScorecard {
   sample_posts: SocialPost[];
 }
 
+export interface QAAnswer {
+  question: string;
+  answer: string;
+  tools_used: string[];
+  sources: { competitor?: string; source_url?: string }[];
+}
+
+export interface TrackedTopic {
+  id: string;
+  topic: string;
+  created_at: string;
+}
+
 export const api = {
   listBriefs: (limit = 20) => request<BriefSummary[]>(`/briefs?limit=${limit}`),
   getBrief: (id: string) => request<BriefDetail>(`/briefs/${id}`),
@@ -122,4 +135,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ competitors, ...(platforms && platforms.length > 0 ? { platforms } : {}) }),
     }),
+  askQuestion: (question: string) =>
+    request<QAAnswer>(`/qa`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
+  listTopics: () => request<TrackedTopic[]>(`/topics`),
+  addTopic: (topic: string) =>
+    request<TrackedTopic>(`/topics`, { method: "POST", body: JSON.stringify({ topic }) }),
+  removeTopic: (id: string) =>
+    request<{ ok: boolean }>(`/topics/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

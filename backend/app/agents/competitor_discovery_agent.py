@@ -40,7 +40,7 @@ class CompetitorDiscoveryAgent:
 
         results_txt = "\n".join(f"- {r.get('title', '')}: {r.get('snippet', '')} ({r.get('url', '')})" for r in results)
         user_prompt = f"Company: {company}\n\nSearch results:\n{results_txt}"
-        response = await call_llm(DISCOVERY_SYSTEM_PROMPT, user_prompt, max_tokens=1000)
+        response = await call_llm(DISCOVERY_SYSTEM_PROMPT, user_prompt, max_tokens=1000, step="competitor_discovery.discover")
         try:
             items = extract_json(response)
         except Exception:

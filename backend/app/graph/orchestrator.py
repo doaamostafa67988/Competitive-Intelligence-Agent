@@ -23,6 +23,7 @@ from app.agents.graph_builder_agent import GraphBuilderAgent
 from app.agents.analyst_agent import AnalystAgent
 from app.agents.changelog_agent import ChangeLogAgent
 from app.agents.social_listening_agent import SocialListeningAgent
+from app.db.postgres_client import save_observations, save_claims, list_topics
 from app.models.schemas import RawObservation, VerifiedClaim, CompetitiveBrief, BriefSection, SocialScorecard
 from app.services.embeddings import embed_text
 
@@ -58,6 +59,7 @@ async def research_node(state: PipelineState) -> PipelineState:
             target["name"], target.get("pricing_url"), target.get("careers_url")
         )
         all_obs.extend(obs)
+    await save_observations(all_obs)  # audit trail in Postgres - see postgres_client.py docstring
     return {"observations": all_obs}
 
 
@@ -71,6 +73,7 @@ async def social_listening_node(state: PipelineState) -> PipelineState:
 
 async def fact_check_node(state: PipelineState) -> PipelineState:
     claims = await fact_checker_agent.verify(state["observations"])
+    await save_claims(claims)  # audit trail in Postgres, including REJECTED claims - see postgres_client.py docstring
     return {"claims": claims}
 
 
@@ -122,6 +125,17 @@ async def changelog_node(state: PipelineState) -> PipelineState:
     entries = changelog_agent.diff_against_snapshot(state.get("previous_snapshot"))
     brief = state["brief"]
     brief.change_log = entries
+
+    # Topic-filtered narrative on top of the (still fully deterministic)
+    # diff above - see changelog_agent.py docstring for why the diff itself
+    # never touches an LLM. None (not "") when no topics are configured, so
+    # the frontend/markdown renderer can tell "nothing relevant" apart from
+    # "user hasn't set up topics yet".
+    topic_rows = await list_topics()
+    topics = [t["topic"] for t in topic_rows]
+    summary, _ = await changelog_agent.summarize_relevant_changes(entries, topics)
+    brief.change_log_summary = summary or None
+
     return {"brief": brief}
 
 

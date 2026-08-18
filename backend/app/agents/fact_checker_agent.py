@@ -15,6 +15,7 @@ from typing import List
 from app.agents.llm import call_llm, extract_json
 from app.config import get_settings
 from app.models.schemas import RawObservation, VerifiedClaim, VerificationStatus
+from app.services.guardrails import check_output_json_schema
 
 settings = get_settings()
 
@@ -50,12 +51,22 @@ class FactCheckerAgent:
     ) -> List[VerifiedClaim]:
         obs_by_id = {o.id: o for o in observations}
         payload = "\n".join(f"- id={o.id} | source={o.source_url} | text={o.text}" for o in observations)
-        response = await call_llm(CLUSTER_SYSTEM_PROMPT, f"Competitor: {competitor}\n\nObservations:\n{payload}")
+        response = await call_llm(CLUSTER_SYSTEM_PROMPT, f"Competitor: {competitor}\n\nObservations:\n{payload}", step="fact_checker.cluster")
 
         try:
             clusters = extract_json(response)
         except Exception:
             clusters = []
+        if not isinstance(clusters, list):
+            clusters = []
+        # Output guardrail: each cluster item must at least have "claim" and
+        # "supporting_observation_ids" before we build a VerifiedClaim from
+        # it - a malformed item here would otherwise silently become a
+        # confidence-0 claim with an empty statement.
+        clusters = [
+            c for c in clusters
+            if check_output_json_schema(c, {"claim", "supporting_observation_ids"}, step="fact_checker.cluster")
+        ]
 
         claims: List[VerifiedClaim] = []
         for c in clusters:

@@ -67,6 +67,7 @@ async def get_brief_detail(brief_id: str):
         "sections": record.sections_json,
         "change_log": record.change_log_json,
         "unconfirmed_claims": record.unconfirmed_claims_json,
+        "change_log_summary": record.change_log_summary,
     }
 
 
@@ -84,5 +85,6 @@ async def get_brief_markdown(brief_id: str):
         sections=[BriefSection(**s) for s in record.sections_json],
         change_log=[ChangeLogEntry(**c) for c in record.change_log_json],
         unconfirmed_claims=record.unconfirmed_claims_json,
+        change_log_summary=record.change_log_summary,
     )
     return {"markdown": render_markdown(brief)}

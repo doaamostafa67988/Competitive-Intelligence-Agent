@@ -8,13 +8,24 @@ vector search over announcement/press-release text in Qdrant. Both result
 sets are combined and handed to the LLM to synthesize the executive brief.
 """
 from __future__ import annotations
+import logging
 import uuid
 from datetime import date, timedelta
 from typing import List
 from app.agents.llm import call_llm, extract_json
 from app.db.neo4j_client import get_neo4j_client
 from app.db.qdrant_client import get_vector_store
+from app.db.postgres_client import list_topics
 from app.models.schemas import CompetitiveBrief, BriefSection, VerifiedClaim, VerificationStatus
+from app.services.logging_utils import truncate_for_log
+
+rag_logger = logging.getLogger("rag")  # before/after retrieval, same logger as research_agent.py's chunk/index logs
+
+# Fallback only - used when the user hasn't configured any tracked_topics
+# yet (see api/routes_topics.py). Once they add topics of their own, those
+# replace this list entirely rather than being appended to it, so the brief
+# stays scoped to what the user actually asked to watch.
+DEFAULT_THEMES = ["AI features", "enterprise expansion", "new integrations"]
 
 SYNTHESIS_SYSTEM_PROMPT = """You are the lead analyst producing a weekly
 executive competitive-intelligence brief for a SaaS company's leadership
@@ -54,17 +65,28 @@ class AnalystAgent:
         repeat_price_changers = self.neo4j.competitors_who_changed_price_n_times(since, n=2)
 
         # --- Vector search leg: semantic/thematic questions ---
+        topic_rows = await list_topics()
+        themes = [t["topic"] for t in topic_rows] or DEFAULT_THEMES
         thematic_hits = []
-        for theme in ["AI features", "enterprise expansion", "new integrations"]:
+        for theme in themes:
             try:
+                # --- before retrieval ---
+                rag_logger.info("retrieve_start step=analyst.thematic_search query=%s", theme)
                 embedding = await query_embedding_fn(theme)
                 hits = self.vector_store.search(embedding, top_k=5)
+                # --- after retrieval ---
+                rag_logger.info(
+                    "retrieve_end step=analyst.thematic_search query=%s hit_count=%d hits=%s",
+                    theme, len(hits),
+                    [{"competitor": h.get("competitor"), "score": h.get("score"), "text": truncate_for_log(h.get("text", ""), 200)} for h in hits],
+                )
                 thematic_hits.append({"theme": theme, "hits": hits})
-            except Exception:
+            except Exception as e:
+                rag_logger.info("retrieve_error step=analyst.thematic_search query=%s error=%s", theme, e)
                 continue
 
         user_prompt = self._build_user_prompt(competitors, confirmed, unconfirmed, repeat_price_changers, thematic_hits)
-        response = await call_llm(SYNTHESIS_SYSTEM_PROMPT, user_prompt, max_tokens=3000)
+        response = await call_llm(SYNTHESIS_SYSTEM_PROMPT, user_prompt, max_tokens=3000, step="analyst.synthesize")
         try:
             data = extract_json(response)
         except Exception:
